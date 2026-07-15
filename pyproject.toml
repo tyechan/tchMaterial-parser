@@ -1,0 +1,14 @@
+[project]
+name = "tchmaterial-parser"
+version = "4.0.0"
+description = "国家中小学智慧教育平台电子课本下载工具"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pillow",
+    "psutil",
+    "pypdf",
+    "pyperclip",
+    "pywin32; sys_platform == 'win32'",
+    "requests",
+]

@@ -273,15 +273,22 @@ def download() -> None: # 下载资源文件
 def download_file(url: str, save_path: str, chapters: list[dict] | None = None) -> None: # 下载文件
     current_state = { "download_url": url, "save_path": save_path, "downloaded_size": 0, "total_size": 0, "finished": False, "failed_reason": None }
     download_states.append(current_state)
+    temp_path = f"{save_path}.tmp"
 
     try:
-        response = session.get(url, headers=headers, stream=True)
+        # 下载勿附带 Authorization: Bearer，否则 CDN 会在约 512KB 处切断连接
+        download_headers = {
+            "X-ND-AUTH": headers["X-ND-AUTH"],
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Referer": "https://basic.smartedu.cn/",
+            "Accept": "*/*",
+        }
+        response = session.get(url, headers=download_headers, stream=True, timeout=(15, 120))
 
         if not response.ok: # 服务器返回表示错误的 HTTP 状态码
             current_state["finished"] = True
             current_state["failed_reason"] = f"服务器返回 HTTP 状态码 {response.status_code}" + "，Access Token 可能已过期或无效，请重新设置" if response.status_code == 401 or response.status_code == 403 else ""
         else:
-            temp_path = f"{save_path}.tmp"
             current_state["total_size"] = int(response.headers.get("Content-Length", 0))
 
             with open(temp_path, "wb") as file:
@@ -300,20 +307,38 @@ def download_file(url: str, save_path: str, chapters: list[dict] | None = None) 
                         ui_call(download_progress_bar.config, value=download_progress) # 更新进度条
                         ui_call(progress_label.config, text=f"{format_bytes(all_downloaded_size)}/{format_bytes(all_total_size)} ({download_progress:.2f}%) 已下载 {downloaded_number}/{total_number}") # 更新标签以显示当前下载进度
 
-            current_state["downloaded_size"] = current_state["total_size"]
+            if current_state["total_size"] > 0 and current_state["downloaded_size"] != current_state["total_size"]:
+                current_state["finished"] = True
+                current_state["failed_reason"] = f"下载不完整：已接收 {current_state['downloaded_size']} 字节，期望 {current_state['total_size']} 字节"
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            else:
+                if chapters: # 添加书签
+                    ui_call(progress_label.config, text="添加书签")
+                    add_bookmarks(temp_path, chapters)
 
-            if chapters: # 添加书签
-                ui_call(progress_label.config, text="添加书签")
-                add_bookmarks(temp_path, chapters)
+                os.replace(temp_path, save_path) # 重命名临时文件为目标文件
+                current_state["finished"] = True
 
-            os.replace(temp_path, save_path) # 重命名临时文件为目标文件
-            current_state["finished"] = True
-
+    except requests.exceptions.Timeout as e:
+        print_error(e)
+        current_state["finished"] = True
+        current_state["failed_reason"] = "下载超时，请检查网络后重试"
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+    except requests.exceptions.ChunkedEncodingError as e:
+        print_error(e)
+        current_state["finished"] = True
+        current_state["failed_reason"] = f"下载连接中断（已接收 {current_state['downloaded_size']} 字节），请重试"
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
     except Exception as e:
         print_error(e)
         current_state["downloaded_size"], current_state["total_size"] = 0, 0
         current_state["finished"] = True
         current_state["failed_reason"] = traceback.format_exc().rstrip()
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
     if all(state["finished"] for state in download_states): # 所有文件下载完成
         ui_call(download_progress_bar.config, value=0) # 重置进度条
